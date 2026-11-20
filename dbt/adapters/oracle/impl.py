@@ -388,7 +388,7 @@ class OracleAdapter(SQLAdapter):
             return column
 
     def valid_incremental_strategies(self):
-        return ["append", "merge", "delete+insert", "microbatch"]
+        return ["append", "merge", "delete+insert", "microbatch", "versioned_merge"]
 
     @available
     @classmethod

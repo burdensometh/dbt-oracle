@@ -32,6 +32,12 @@
 
   {% set to_drop = [] %}
   {% if existing_relation is none %}
+      {%- if config.get('incremental_strategy') == 'versioned_merge' -%}
+          {#-- The target table is (re)created from scratch. Drop a leftover CDC
+              ledger of a previously dropped target so stale versions cannot
+              block or reject events. --#}
+          {% do adapter.drop_relation(oracle__cdc_ledger_relation(target_relation)) %}
+      {%- endif -%}
       {% set build_sql = create_table_as(False, target_relation, sql, language) %}
   {% elif existing_relation.is_view or full_refresh_mode %}
       {#-- Make sure the backup doesn't exist so we don't encounter issues with the rename below #}
@@ -43,6 +49,12 @@
       {% else %}
             {% do adapter.rename_relation(existing_relation, backup_relation) %}
       {% endif %}
+      {%- if config.get('incremental_strategy') == 'versioned_merge' -%}
+          {#-- A full refresh rebuilds the target table from scratch, so the CDC
+              ledger must be reset as well: it is re-initialized from the new
+              target on the next incremental run. --#}
+          {% do adapter.drop_relation(oracle__cdc_ledger_relation(target_relation)) %}
+      {%- endif -%}
       {% set build_sql = create_table_as(False, target_relation, sql, language) %}
       {% do to_drop.append(backup_relation) %}
   {% else %}
