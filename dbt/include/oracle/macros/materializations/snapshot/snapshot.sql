@@ -44,6 +44,12 @@
 {% macro oracle__snapshot_staging_table(strategy, source_sql, target_relation) -%}
 
     {% set columns = config.get('snapshot_table_column_names') or get_snapshot_table_column_names() %}
+    {% set hard_deletes_scope = get_hard_deletes_scope() %}
+    {% if hard_deletes_scope is not none and strategy.hard_deletes == 'ignore' %}
+        {% do exceptions.raise_compiler_error(
+            "Snapshot '" ~ model.name ~ "': 'hard_deletes_scope_column'/'hard_deletes_scope_values' "
+            ~ "only take effect when hard_deletes is 'invalidate' or 'new_record'.") %}
+    {% endif %}
     {% if strategy.hard_deletes == 'new_record' %}
         {% set new_scd_id = snapshot_hash_arguments([columns.dbt_scd_id, snapshot_get_time()]) %}
     {% endif %}
@@ -167,6 +173,10 @@
         left join deletes_source_data source_data
         on {{ unique_key_join_on(strategy.unique_key, "snapshotted_data", "source_data") }}
             where {{ unique_key_is_null(strategy.unique_key, "source_data") }}
+            {%- if hard_deletes_scope is not none %}
+            -- only open records inside the declared authoritative scope can be deleted
+            and {{ hard_deletes_scope_predicate("snapshotted_data", hard_deletes_scope) }}
+            {%- endif %}
             {%- if strategy.hard_deletes == 'new_record' %}
                 and not (
                     --avoid updating the record's valid_to if the latest entry is marked as deleted
@@ -211,6 +221,10 @@
         left join deletes_source_data source_data
             on {{ unique_key_join_on(strategy.unique_key, "snapshotted_data", "source_data") }}
         where {{ unique_key_is_null(strategy.unique_key, "source_data") }}
+        {%- if hard_deletes_scope is not none %}
+        -- only open records inside the declared authoritative scope can be deleted
+        and {{ hard_deletes_scope_predicate("snapshotted_data", hard_deletes_scope) }}
+        {%- endif %}
         and not (
             --avoid inserting a new record if the latest one is marked as deleted
             snapshotted_data.{{ columns.dbt_is_deleted }} = 'True'
@@ -322,6 +336,16 @@
 
   {% set strategy_macro = strategy_dispatch(strategy_name) %}
   {% set strategy = strategy_macro(model, "snapshotted_data", "source_data", config, target_relation_exists) %}
+
+  {#-- Fail fast, before the snapshot table is created or modified, when the source
+       contains rows whose scope value was not declared for this run --#}
+  {% set hard_deletes_scope = get_hard_deletes_scope() %}
+  {% if hard_deletes_scope is not none and strategy.hard_deletes == 'ignore' %}
+      {% do exceptions.raise_compiler_error(
+          "Snapshot '" ~ model.name ~ "': 'hard_deletes_scope_column'/'hard_deletes_scope_values' "
+          ~ "only take effect when hard_deletes is 'invalidate' or 'new_record'.") %}
+  {% endif %}
+  {% do check_hard_deletes_scope(sql, hard_deletes_scope) %}
 
   {% if not target_relation_exists %}
 

@@ -19,6 +19,33 @@ If the timestamps are unchanged, then dbt will not take any action
 
 - **check** - The check strategy is useful for tables which do not have a reliable updated_at column. This strategy works by comparing a list of columns between their current and historical values. If any of these columns have changed, then dbt will invalidate the old record and record the new one. If the column values are identical, then dbt will not take any action.
 
+## Authoritative scope for hard deletes (partial loads)
+
+Hard-delete detection (`hard_deletes = 'invalidate'` or `'new_record'`) treats every row missing from the source as deleted. That is wrong when each run only collects a subset of the full dataset — for example only a few tenants are pulled per day. Tenants that were simply not collected must not be marked as deleted.
+
+Two configs declare the authoritative subset of a run:
+
+- `hard_deletes_scope_column`: the column identifying subsets (e.g. `tenant_id`)
+- `hard_deletes_scope_values`: the list of values this run's source actually contains
+
+Only open snapshot rows whose scope column matches a declared value take part in the missing-row comparison, so a scope row missing from the source — including when the source is empty — is still recognized as deleted. Rows outside the declared scope keep both their current open version and their full history untouched. If the source contains a scope value that was not declared, the run fails before the snapshot table is modified.
+
+```sql
+{% snapshot tenant_snapshot %}
+    {{ config(
+        strategy='check',
+        unique_key='id',
+        check_cols='all',
+        hard_deletes='invalidate',
+        hard_deletes_scope_column='tenant_id',
+        hard_deletes_scope_values=var('collected_tenants')
+    ) }}
+    select * from {{ ref('tenant_data') }}
+{% endsnapshot %}
+```
+
+Both configs must be set together, `hard_deletes_scope_values` must be a non-empty list of scalar values, and the configs are only valid when `hard_deletes` is `'invalidate'` or `'new_record'`.
+
 ## Example
 
 ### Snapshot SQL
